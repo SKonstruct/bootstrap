@@ -54,6 +54,7 @@ public final class GLFW {
     private static final int EV_SCROLL       = 3; // a=delta (+/-1)
     private static final int EV_KEY          = 4; // a=key, b=action, c=mods
     private static final int EV_CHAR         = 5; // a=codepoint
+    private static final int EV_FRAMEBUFFER_SIZE = 6; // a=width, b=height (framebuffer px)
 
     private static final int DRAIN_RECORDS = 256;
     private static final int[] drainBuf = new int[DRAIN_RECORDS * 4];
@@ -88,6 +89,12 @@ public final class GLFW {
                         break;
                     case EV_CHAR:
                         if (charCb != null) charCb.invoke(FAKE_WINDOW, a);
+                        break;
+                    case EV_FRAMEBUFFER_SIZE:
+                        width = a;
+                        height = b;
+                        if (framebufferSizeCb != null) framebufferSizeCb.invoke(FAKE_WINDOW, width, height);
+                        if (windowSizeCb != null) windowSizeCb.invoke(FAKE_WINDOW, width, height);
                         break;
                     default:
                         break;
@@ -183,6 +190,8 @@ public final class GLFW {
     private static GLFWCursorPosCallbackI   cursorPosCb;
     private static GLFWScrollCallbackI      scrollCb;
     private static GLFWWindowFocusCallbackI focusCb;
+    private static GLFWFramebufferSizeCallbackI framebufferSizeCb;
+    private static GLFWWindowSizeCallbackI      windowSizeCb;
 
     public static long glfwCreateWindow(int w, int h, CharSequence title, long monitor, long share) {
         // SK sends what it WANTS the window to be but like, we don't always 
@@ -288,8 +297,8 @@ public final class GLFW {
     public static GLFWCursorPosCallback glfwSetCursorPosCallback(long window, GLFWCursorPosCallbackI cb) { cursorPosCb = cb; return null; }
     public static GLFWCursorEnterCallback glfwSetCursorEnterCallback(long window, GLFWCursorEnterCallbackI cb) { return null; }
     public static GLFWScrollCallback glfwSetScrollCallback(long window, GLFWScrollCallbackI cb) { scrollCb = cb; return null; }
-    public static GLFWFramebufferSizeCallback glfwSetFramebufferSizeCallback(long window, GLFWFramebufferSizeCallbackI cb) { return null; }
-    public static GLFWWindowSizeCallback glfwSetWindowSizeCallback(long window, GLFWWindowSizeCallbackI cb) { return null; }
+    public static GLFWFramebufferSizeCallback glfwSetFramebufferSizeCallback(long window, GLFWFramebufferSizeCallbackI cb) { framebufferSizeCb = cb; return null; }
+    public static GLFWWindowSizeCallback glfwSetWindowSizeCallback(long window, GLFWWindowSizeCallbackI cb) { windowSizeCb = cb; return null; }
     public static GLFWWindowPosCallback glfwSetWindowPosCallback(long window, GLFWWindowPosCallbackI cb) { return null; }
     public static GLFWWindowFocusCallback glfwSetWindowFocusCallback(long window, GLFWWindowFocusCallbackI cb) { focusCb = cb; return null; }
     public static GLFWWindowCloseCallback glfwSetWindowCloseCallback(long window, GLFWWindowCloseCallbackI cb) { return null; }
