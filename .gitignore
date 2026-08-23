@@ -10,3 +10,4 @@ build/
 # Output
 out/
 sk-bootstrap.jar
+*.class
