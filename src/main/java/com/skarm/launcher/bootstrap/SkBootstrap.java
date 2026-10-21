@@ -45,7 +45,7 @@ public final class SkBootstrap {
         System.out.println("[SkBootstrap] appdir = " + appDir);
         System.out.println("[SkBootstrap] sk args = " + java.util.Arrays.toString(skArgs));
 
-        EnvConfig envc = new EnvConfig(appDir);
+        EnvConfig envc = newEnvConfig(appDir);
         HeadlessGetdown gd = new HeadlessGetdown(envc);
 
         // Getdown.run() does its thing on its own
@@ -55,14 +55,17 @@ public final class SkBootstrap {
         } catch (Throwable t) {
             System.err.println("[SkBootstrap] Getdown.run() threw:");
             t.printStackTrace();
+            fail("The game's updater could not start (" + t.getClass().getSimpleName() + ").");
             return;
         }
 
         try {
-            System.out.println("[SkBootstrap] awaiting getdown completion (15 min timeout)…");
-            boolean ok = gd.awaitCompletion(15, TimeUnit.MINUTES);
+            System.out.println("[SkBootstrap] awaiting getdown completion (stall limit "
+                + STALL_MINUTES + " min)…");
+            boolean ok = gd.awaitCompletionUnlessStalled(TimeUnit.MINUTES.toMillis(STALL_MINUTES));
             if (!ok) {
-                System.err.println("[SkBootstrap] getdown timed out");
+                System.err.println("[SkBootstrap] getdown stalled");
+                fail("The game's updater stopped responding. Check your connection and try again.");
                 return;
             }
         } catch (InterruptedException e) {
@@ -72,10 +75,12 @@ public final class SkBootstrap {
 
         if (gd.exitCode() != null) {
             System.out.println("[SkBootstrap] getdown exited with code " + gd.exitCode());
+            fail("The game's updater stopped (code " + gd.exitCode() + "). Share the log if it persists.");
             return;
         }
         if (!gd.wasLaunchRequested()) {
             System.out.println("[SkBootstrap] getdown completed without requesting launch");
+            fail("The game's updater finished without starting the game. Share the log if it persists.");
             return;
         }
 
@@ -112,7 +117,113 @@ public final class SkBootstrap {
         } catch (Throwable t) {
             System.err.println("[SkBootstrap] SK launch threw:");
             t.printStackTrace();
+            fail("The game stopped while starting. Share the log if it keeps happening.");
         }
+    }
+
+    /** Getdown may be silent this long before it counts as stalled. */
+    private static final int STALL_MINUTES = 2;
+
+    /**
+     * The one place a boot failure becomes visible: the host shows the message with a Share Logs
+     * button. Hosts that have not registered the native (older builds, iOS) fall back to the
+     * overlay text, which at least stops saying "Validating".
+     */
+    private static void fail(String message) {
+        try {
+            nativeBootFailed(message);
+            return;
+        } catch (Throwable notRegistered) {
+            // fall through
+        }
+        try {
+            nativeLaunchStatus(message);
+        } catch (Throwable ignored) {
+            // best effort
+        }
+    }
+
+    /**
+     * The game's files are served over HTTPS as well, but getdown.txt names plain http and getdown
+     * follows it, so an attacker on the path could swap the digest and every jar. This returns the
+     * https spelling of the manifest's appbase, or null when there is nothing to change.
+     */
+    static String httpsAppbase(File manifest) {
+        if (!manifest.isFile()) return null;
+        try {
+            for (String line : java.nio.file.Files.readAllLines(manifest.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
+                String t = line.trim();
+                if (!t.startsWith("appbase")) continue;
+                int eq = t.indexOf('=');
+                if (eq < 0 || !t.substring(0, eq).trim().equals("appbase")) continue;
+                String value = t.substring(eq + 1).trim();
+                return value.regionMatches(true, 0, "http://", 0, 7) ? "https://" + value.substring(7) : null;
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            System.err.println("[SkBootstrap] could not read the manifest: " + e);
+        }
+        return null;
+    }
+
+    /**
+     * Rewrites the http:// in the manifest's appbase and latest lines to https://. Getdown's
+     * proxy check and first fetch read the file as it is on disk, before the appbase override in
+     * {@link #newEnvConfig} applies, and both hosts serve everything over https. Written through a
+     * temp file so a kill cannot leave a half-written manifest.
+     *
+     * @return whether the file was changed
+     */
+    static boolean rewriteManifestToHttps(File manifest) {
+        if (!manifest.isFile()) return false;
+        try {
+            java.nio.file.Path path = manifest.toPath();
+            List<String> lines = java.nio.file.Files.readAllLines(path, java.nio.charset.StandardCharsets.UTF_8);
+            boolean changed = false;
+            for (int i = 0; i < lines.size(); i++) {
+                String line = lines.get(i);
+                String t = line.trim();
+                int eq = t.indexOf('=');
+                if (eq < 0) continue;
+                String key = t.substring(0, eq).trim();
+                String value = t.substring(eq + 1).trim();
+                if ((key.equals("appbase") || key.equals("latest")) && value.regionMatches(true, 0, "http://", 0, 7)) {
+                    lines.set(i, key + " = https://" + value.substring(7));
+                    changed = true;
+                }
+            }
+            if (!changed) return false;
+            java.nio.file.Path tmp = path.resolveSibling(manifest.getName() + ".https");
+            java.nio.file.Files.write(tmp, lines, java.nio.charset.StandardCharsets.UTF_8);
+            java.nio.file.Files.move(tmp, path, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            return true;
+        } catch (java.io.IOException | RuntimeException e) {
+            System.err.println("[SkBootstrap] could not rewrite the manifest to https: " + e);
+            return false;
+        }
+    }
+
+    /**
+     * Getdown prefers an appbase from its bootstrap config over getdown.txt (it logs "Using
+     * 'appbase' from bootstrap config"), including after it replaces getdown.txt with the server's
+     * copy, so passing the https appbase this way covers the whole run.
+     */
+    private static EnvConfig newEnvConfig(File appDir) {
+        File manifest = new File(appDir, "getdown.txt");
+        if (rewriteManifestToHttps(manifest)) System.out.println("[SkBootstrap] manifest rewritten to https");
+        String appbase = httpsAppbase(manifest);
+        if (appbase == null) return new EnvConfig(appDir);
+        System.setProperty("appbase", appbase);
+        List<EnvConfig.Note> notes = new ArrayList<>();
+        EnvConfig config = EnvConfig.create(new String[] { appDir.getPath() }, notes);
+        for (EnvConfig.Note note : notes) {
+            System.out.println("[SkBootstrap] getdown config " + note.level + ": " + note.message);
+        }
+        if (config == null) {
+            System.err.println("[SkBootstrap] could not apply the https appbase; using the manifest as is");
+            return new EnvConfig(appDir);
+        }
+        System.out.println("[SkBootstrap] appbase = " + appbase);
+        return config;
     }
 
     private static final Set<String> SK_LWJGL_OVERRIDES = new HashSet<>();
@@ -204,6 +315,9 @@ public final class SkBootstrap {
      * is swallowed by callers).
      */
     static native void nativeLaunchStatus(String message);
+
+    /** Tells the host the game cannot start and why, so it can show it instead of a stale status. */
+    static native void nativeBootFailed(String message);
 
     /**
      * Toggles the Android Steam-login keep-alive (a foreground service that holds

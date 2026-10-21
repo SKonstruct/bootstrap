@@ -15,6 +15,15 @@ public class HeadlessGetdownTest {
     private Field lastTextField;
     private Field lastForwardedField;
 
+    @org.junit.Test
+    public void anyStatusCallCountsAsActivity() throws Exception {
+        Thread.sleep(30);
+        long before = hgd.idleMillis();
+        org.junit.Assert.assertTrue(before >= 20);
+        forwardStatus.invoke(hgd, "m.validating", 5);
+        org.junit.Assert.assertTrue(hgd.idleMillis() < before);
+    }
+
     @Before
     public void setUp() throws Exception {
         File tempDir = File.createTempFile("getdown", "dir");

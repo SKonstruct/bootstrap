@@ -25,8 +25,30 @@ public final class HeadlessGetdown extends Getdown {
         super(envc);
     }
 
+    /** Last time getdown said anything (status text or percent), in System.nanoTime(). */
+    private volatile long lastActivityNanos = System.nanoTime();
+
     public boolean awaitCompletion(long timeout, TimeUnit unit) throws InterruptedException {
         return done.await(timeout, unit);
+    }
+
+    /**
+     * Waits for getdown to finish, giving up only after it has been silent for {@code stallMillis}.
+     * A fixed wall-clock cap is wrong either way: too short for a first 440 MB download on a slow
+     * link, and no help at all when getdown wedges early. Getdown reports progress many times a
+     * second while it is working, so silence means it is not.
+     *
+     * @return true if getdown finished, false if it stalled
+     */
+    public boolean awaitCompletionUnlessStalled(long stallMillis) throws InterruptedException {
+        while (!done.await(5, TimeUnit.SECONDS)) {
+            if (idleMillis() > stallMillis) return false;
+        }
+        return true;
+    }
+
+    long idleMillis() {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - lastActivityNanos);
     }
 
     public boolean wasLaunchRequested() { return launchRequested; }
@@ -129,6 +151,7 @@ public final class HeadlessGetdown extends Getdown {
      * tick). Best-effort: never let overlay plumbing derail the actual update.
      */
     private void forwardStatus(String message, int percent) {
+        lastActivityNanos = System.nanoTime();
         String text;
         if (message != null && !message.isEmpty()) {
             try {
