@@ -5,12 +5,16 @@ import com.threerings.getdown.launcher.Getdown;
 
 import java.io.File;
 import java.io.FilenameFilter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -108,6 +112,11 @@ public final class SkBootstrap {
             // SK sometimes works here so... might as well try.
         }
 
+        applyExtraProperties(appDir);
+        // The saved web account, handed over by the launcher's environment (never argv, which
+        // a crash report would print). SK's main takes username then password.
+        skArgs = withSavedLogin(skArgs, System.getenv("SK_WEB_USER"), System.getenv("SK_WEB_PASS"));
+
         try {
             System.out.println("[SkBootstrap] invoking " + SK_MAIN_CLASS + ".main(" + skArgs.length + " args)");
             Class<?> skMain = Class.forName(SK_MAIN_CLASS, true, skCl);
@@ -118,6 +127,47 @@ public final class SkBootstrap {
             System.err.println("[SkBootstrap] SK launch threw:");
             t.printStackTrace();
             fail("The game stopped while starting. Share the log if it keeps happening.");
+        }
+    }
+
+    /** Explicit command-line arguments win; otherwise the saved login, if both halves are present. */
+    static String[] withSavedLogin(String[] skArgs, String user, String pass) {
+        if (skArgs.length > 0 || user == null || user.isEmpty() || pass == null || pass.isEmpty()) {
+            return skArgs;
+        }
+        return new String[] {user, pass};
+    }
+
+    /**
+     * The {@code -Dkey=value} lines of extra.txt, which the desktop Getdown passes to the game's
+     * JVM. The JVM is already running here, so only system properties can still take effect (this
+     * is how a player's own {@code -Dusername=} and {@code -Dpassword=} auto login works); any
+     * other line is ignored.
+     */
+    static Map<String, String> extraProperties(List<String> lines) {
+        Map<String, String> props = new LinkedHashMap<>();
+        for (String raw : lines) {
+            String line = raw.trim();
+            int eq = line.indexOf('=');
+            if (line.startsWith("-D") && eq > 2) {
+                props.put(line.substring(2, eq).trim(), line.substring(eq + 1));
+            }
+        }
+        return props;
+    }
+
+    private static void applyExtraProperties(File appDir) {
+        File extra = new File(appDir, "extra.txt");
+        if (!extra.isFile()) return;
+        try {
+            Map<String, String> props = extraProperties(Files.readAllLines(extra.toPath(), StandardCharsets.UTF_8));
+            for (Map.Entry<String, String> e : props.entrySet()) {
+                System.setProperty(e.getKey(), e.getValue());
+            }
+            // Keys only: the values can be a password.
+            System.out.println("[SkBootstrap] extra.txt properties: " + props.keySet());
+        } catch (Exception e) {
+            System.err.println("[SkBootstrap] could not read extra.txt: " + e);
         }
     }
 
