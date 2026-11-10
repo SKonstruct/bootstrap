@@ -115,7 +115,11 @@ public final class SkBootstrap {
         applyExtraProperties(appDir);
         // The saved web account, handed over by the launcher's environment (never argv, which
         // a crash report would print). SK's main takes username then password.
-        skArgs = withSavedLogin(skArgs, System.getenv("SK_WEB_USER"), System.getenv("SK_WEB_PASS"));
+        // Only if the game is really pointed at the server the launcher chose: a game update can
+        // restore the stock config after the launcher edited it, and the login must not then go to
+        // a different server than the one it was saved for.
+        skArgs = withSavedLogin(skArgs, System.getenv("SK_WEB_USER"), System.getenv("SK_WEB_PASS"),
+            System.getenv("SK_LOGIN_HOST"), configuredHost(skCl));
 
         try {
             System.out.println("[SkBootstrap] invoking " + SK_MAIN_CLASS + ".main(" + skArgs.length + " args)");
@@ -136,6 +140,34 @@ public final class SkBootstrap {
             return skArgs;
         }
         return new String[] {user, pass};
+    }
+
+    /**
+     * As {@link #withSavedLogin(String[], String, String)}, but when the launcher named the server
+     * the login belongs to ({@code expectedHost}), it is dropped unless the game's own
+     * {@code server_host} is that server. An unreadable config counts as a mismatch.
+     */
+    static String[] withSavedLogin(String[] skArgs, String user, String pass, String expectedHost, String actualHost) {
+        if (expectedHost != null && !expectedHost.isEmpty() && !expectedHost.equals(actualHost)) {
+            if (user != null && !user.isEmpty()) {
+                System.err.println("[SkBootstrap] saved login withheld: the game is set up for "
+                    + actualHost + ", the login is for " + expectedHost);
+            }
+            return skArgs;
+        }
+        return withSavedLogin(skArgs, user, pass);
+    }
+
+    /** The {@code server_host} in the {@code deployment.properties} the game will load, or null. */
+    private static String configuredHost(ClassLoader loader) {
+        try (java.io.InputStream in = loader.getResourceAsStream("deployment.properties")) {
+            if (in == null) return null;
+            java.util.Properties props = new java.util.Properties();
+            props.load(in);
+            return props.getProperty("server_host");
+        } catch (java.io.IOException e) {
+            return null;
+        }
     }
 
     /**

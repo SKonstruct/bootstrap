@@ -21,6 +21,19 @@ public class SkBootstrapTest {
     }
 
     @Test
+    public void aLoginForAnotherServerIsWithheld() {
+        String[] none = new String[0];
+        assertArrayEquals(new String[] {"knight", "pw"},
+            SkBootstrap.withSavedLogin(none, "knight", "pw", "10.0.2.2", "10.0.2.2"));
+        // Named server differs from the game's config, or the config could not be read.
+        assertEquals(0, SkBootstrap.withSavedLogin(none, "knight", "pw", "10.0.2.2", "game.spiralknights.com").length);
+        assertEquals(0, SkBootstrap.withSavedLogin(none, "knight", "pw", "10.0.2.2", null).length);
+        // A launcher that does not name a server keeps the previous behavior.
+        assertArrayEquals(new String[] {"knight", "pw"}, SkBootstrap.withSavedLogin(none, "knight", "pw", null, "x"));
+        assertArrayEquals(new String[] {"knight", "pw"}, SkBootstrap.withSavedLogin(none, "knight", "pw", "", null));
+    }
+
+    @Test
     public void extraTxtYieldsOnlyDashDProperties() {
         java.util.Map<String, String> props = SkBootstrap.extraProperties(java.util.Arrays.asList(
             "-Xmx1G", "-Dusername=knight", "  -Dpassword=p=w ", "-XX:+UseG1GC", "-D=bad", "plain"));
