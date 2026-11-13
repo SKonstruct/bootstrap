@@ -7,6 +7,7 @@ import java.io.File;
 import java.io.FilenameFilter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -130,7 +131,7 @@ public final class SkBootstrap {
         } catch (Throwable t) {
             System.err.println("[SkBootstrap] SK launch threw:");
             t.printStackTrace();
-            fail("The game stopped while starting. Share the log if it keeps happening.");
+            fail("The game stopped while starting. Share the log if it keeps happening.", t);
         }
     }
 
@@ -212,6 +213,15 @@ public final class SkBootstrap {
      * overlay text, which at least stops saying "Validating".
      */
     private static void fail(String message) {
+        fail(message, null);
+    }
+
+    /**
+     * As {@link #fail(String)}, with the error behind it. The host shows only the first line to the
+     * user and sends the rest with the report, which is otherwise a bare "the game stopped".
+     */
+    private static void fail(String message, Throwable cause) {
+        if (cause != null) message = message + '\n' + describe(cause);
         try {
             nativeBootFailed(message);
             return;
@@ -223,6 +233,22 @@ public final class SkBootstrap {
         } catch (Throwable ignored) {
             // best effort
         }
+    }
+
+    /**
+     * One line naming what threw and where: the exception behind a reflective call, its message, and
+     * its top frame. The game's classes are obfuscated, so the frame is what locates the fault.
+     */
+    static String describe(Throwable t) {
+        Throwable root = t;
+        while (root instanceof InvocationTargetException && root.getCause() != null) root = root.getCause();
+        StringBuilder sb = new StringBuilder(root.getClass().getName());
+        String message = root.getMessage();
+        if (message != null && !message.isEmpty()) sb.append(": ").append(message);
+        StackTraceElement[] frames = root.getStackTrace();
+        if (frames.length > 0) sb.append(" at ").append(frames[0]);
+        String line = sb.toString().replaceAll("\\s+", " ");
+        return line.length() <= 400 ? line : line.substring(0, 400);
     }
 
     /**

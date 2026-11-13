@@ -8,6 +8,21 @@ import org.junit.Test;
 
 public class SkBootstrapTest {
     @Test
+    public void aFailureNamesTheRealErrorNotTheReflectionWrapper() {
+        Throwable wrapped = new java.lang.reflect.InvocationTargetException(
+            new NoSuchMethodError("'boolean a.B.c(long, int)'"));
+        String line = SkBootstrap.describe(wrapped);
+        assertEquals(true, line.startsWith("java.lang.NoSuchMethodError: 'boolean a.B.c(long, int)' at "));
+        assertEquals(false, line.contains("InvocationTargetException"));
+        assertEquals(false, line.contains("\n"));
+    }
+
+    @Test
+    public void aFailureLineIsCapped() {
+        assertEquals(400, SkBootstrap.describe(new RuntimeException("x".repeat(2000))).length());
+    }
+
+    @Test
     public void aSavedLoginBecomesUsernameThenPassword() {
         assertArrayEquals(new String[] {"knight", "pw"}, SkBootstrap.withSavedLogin(new String[0], "knight", "pw"));
     }
