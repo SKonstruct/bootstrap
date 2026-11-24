@@ -50,6 +50,8 @@ public final class SkBootstrap {
         System.out.println("[SkBootstrap] appdir = " + appDir);
         System.out.println("[SkBootstrap] sk args = " + java.util.Arrays.toString(skArgs));
 
+        signInToSteam();
+
         EnvConfig envc = newEnvConfig(appDir);
         HeadlessGetdown gd = new HeadlessGetdown(envc);
 
@@ -278,6 +280,58 @@ public final class SkBootstrap {
         EXCLUDE_FROM_SK.add("sk-bootstrap.jar");
     }
 
+    /**
+     * Steam mode only (-Dfrenchpress.jar is set only then): signs in before the updater and the game
+     * start, so the QR code is the first thing a new user sees and the game is not running while
+     * they find their phone. frenchpress runs here in a loader of its own, stores the refresh token
+     * and disconnects; the game's copy of frenchpress, in SK's loader, then signs in from that
+     * token. If the user cancels or this fails, the game's copy is told not to ask again.
+     */
+    private static void signInToSteam() {
+        try {
+            runSteamSignIn();
+        } finally {
+            // The host shows the sign-in in portrait and turns landscape once it is over, so it needs
+            // this even when nothing was shown (a stored token, no frenchpress, a failure).
+            try {
+                nativeHideSignIn();
+            } catch (Throwable ignored) {
+                // a host without the native: nothing waits for it
+            }
+        }
+    }
+
+    private static void runSteamSignIn() {
+        String fpJar = System.getProperty("frenchpress.jar");
+        if (fpJar == null || fpJar.isEmpty()) return;
+        File fp = new File(fpJar);
+        if (!fp.isFile()) return; // buildSkClassLoader reports it
+        // A stored token means the game's own frenchpress signs in silently; only a first sign-in
+        // (or one after the token was rejected, which the game's copy then handles) needs this.
+        String credFile = System.getenv("FRENCHPRESS_CRED_FILE");
+        if (credFile != null && new File(credFile).isFile()) return;
+        try {
+            URL own = SkBootstrap.class.getProtectionDomain().getCodeSource().getLocation();
+            // The bootstrap jar supplies NativeBridgePrompt, which has to see frenchpress's
+            // CredentialPrompt, so both go in the one loader.
+            URLClassLoader cl = new URLClassLoader(new URL[] { own, fp.toURI().toURL() },
+                ClassLoader.getPlatformClassLoader());
+            Object session = Class.forName("co.frenchpress.SteamSession", true, cl)
+                .getMethod("get").invoke(null);
+            if (session == null) {
+                System.out.println("[SkBootstrap] no Steam sign-in; continuing without Steam");
+                System.setProperty("frenchpress.signInDeclined", "true");
+                return;
+            }
+            session.getClass().getMethod("disconnect").invoke(session);
+            System.out.println("[SkBootstrap] signed in to Steam before launch");
+        } catch (Throwable t) {
+            System.err.println("[SkBootstrap] Steam sign-in before launch failed:");
+            t.printStackTrace();
+            System.setProperty("frenchpress.signInDeclined", "true");
+        }
+    }
+
     private static URLClassLoader buildSkClassLoader(File appDir, ClassLoader parent) {
         File codeDir = new File(appDir, "code");
         File[] skJars = codeDir.listFiles((FilenameFilter) (dir, name) -> name.endsWith(".jar"));
@@ -360,24 +414,27 @@ public final class SkBootstrap {
      * the :game process alive while the user tabs out to approve the sign-in).
      * Bridges to ART's {@code NativeBridge.steamKeepAlive} exactly like
      * {@link #nativeLaunchStatus}. Reached via reflection from frenchpress's
-     * {@code SteamSession.attempt}, which brackets its auth attempt with
+     * {@code SteamSession}, which brackets its sign-in with
      * {@code true}/{@code false}. Safe no-op until native registration runs.
      */
     static native void nativeSteamKeepAlive(boolean active);
 
     /**
-     * Blocks the calling (HotSpot) thread while the Android UI collects a Steam
-     * Guard authenticator (TOTP) code, then returns it ("" if none/cancelled).
-     * Bridges to ART's {@code NativeBridge.promptForDeviceCode} the same way
-     * {@link #nativeLaunchStatus} reaches the overlay. Reached via reflection
-     * from {@code NativeBridgePrompt}, which runs in SK's classloader and so
-     * must target THIS (system-loader) copy of SkBootstrap — the one whose
-     * natives sklauncher.c registered.
+     * Shows (or, when Steam rotates the challenge, updates) the Steam sign-in QR code in
+     * the host UI, without blocking. {@code qrModules} is one row per line, {@code '1'} for
+     * a dark module and {@code '0'} for a light one, without a quiet zone. Bridges to the
+     * host the same way {@link #nativeLaunchStatus} reaches the overlay. Reached via
+     * reflection from {@code NativeBridgePrompt}, which runs in SK's classloader and so
+     * must target THIS (system-loader) copy of SkBootstrap — the one whose natives the
+     * host registered.
      */
-    static native String nativePromptDeviceCode(boolean prevWrong);
+    static native void nativeShowSignIn(String challengeUrl, String qrModules);
 
-    /** Blocking Steam Guard email-code prompt. See {@link #nativePromptDeviceCode}. */
-    static native String nativePromptEmailCode(String email, boolean prevWrong);
+    /** Removes the sign-in UI. Does not block. See {@link #nativeShowSignIn}. */
+    static native void nativeHideSignIn();
+
+    /** True once the user cancelled the sign-in. Polled by frenchpress; does not block. */
+    static native boolean nativeSignInCancelled();
 
     private SkBootstrap() {} // static-only
 }
