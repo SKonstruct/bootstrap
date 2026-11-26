@@ -320,15 +320,87 @@ public final class GLFW {
         if (ys != null && ys.length > 0) ys[0] = cursorY;
     }
     public static void glfwSetCursorPos(long window, double x, double y) { cursorX = x; cursorY = y; }
-    public static void glfwSetInputMode(long window, int mode, int value) { /* no-op */ }
+    public static void glfwSetInputMode(long window, int mode, int value) {
+        if (mode == GLFW_CURSOR) {
+            cursorHidden = value == GLFW_CURSOR_HIDDEN || value == GLFW_CURSOR_DISABLED;
+            publishCursor();
+        }
+    }
     public static int glfwGetInputMode(long window, int mode) { return 0; }
 
-    // --- cursors: hand back sentinel handles, assume touchscreen is available anyway ---
+    // --- cursors ---------------------------------------------------------------
+    // The game draws its cursor as a window cursor: glfwCreateCursor takes its art (RGBA pixels and a hotspot) and
+    // glfwSetCursor selects it. There is no window system here, so the art is kept and the selected one is handed to
+    // the native side, which draws it where the game's cursor is (when the user has the cursor switched on).
+    // A standard (shape) cursor has no art and shows nothing.
+    private static final int GLFW_CURSOR = 0x33001;
+    private static final int GLFW_CURSOR_HIDDEN = 0x34002;
+    private static final int GLFW_CURSOR_DISABLED = 0x34003;
+    private static final int MAX_CURSOR_PIXELS = 128 * 128;
+
+    private static final class CursorImage {
+        final int width, height, hotX, hotY;
+        final byte[] rgba;
+
+        CursorImage(int width, int height, byte[] rgba, int hotX, int hotY) {
+            this.width = width;
+            this.height = height;
+            this.rgba = rgba;
+            this.hotX = hotX;
+            this.hotY = hotY;
+        }
+    }
+
+    private static final java.util.Map<Long, CursorImage> cursors = new java.util.concurrent.ConcurrentHashMap<>();
     private static long nextCursor = 0x100L;
-    public static long glfwCreateCursor(GLFWImage image, int xhot, int yhot) { return ++nextCursor; }
-    public static long glfwCreateStandardCursor(int shape) { return ++nextCursor; }
-    public static void glfwDestroyCursor(long cursor) { /* no-op */ }
-    public static void glfwSetCursor(long window, long cursor) { /* no-op */ }
+    private static volatile long currentCursor = 0L;
+    private static volatile boolean cursorHidden = false;
+    private static CursorImage publishedCursor;
+    private static boolean cursorPublished;
+
+    /** (0, 0, null, 0, 0) means no cursor art: nothing to draw. */
+    private static native void nativeSetCursor(int width, int height, byte[] rgba, int hotX, int hotY);
+
+    /** Tells the native side what the game's cursor looks like now; only when that changed. */
+    private static synchronized void publishCursor() {
+        CursorImage image = cursorHidden ? null : cursors.get(currentCursor);
+        if (cursorPublished && image == publishedCursor) return;
+        cursorPublished = true;
+        publishedCursor = image;
+        try {
+            if (image == null) nativeSetCursor(0, 0, null, 0, 0);
+            else nativeSetCursor(image.width, image.height, image.rgba, image.hotX, image.hotY);
+        } catch (UnsatisfiedLinkError e) {
+            // Native side without the cursor hook (an older library): the game just has no visible cursor.
+        }
+    }
+
+    public static synchronized long glfwCreateCursor(GLFWImage image, int xhot, int yhot) {
+        long handle = ++nextCursor;
+        try {
+            int w = image.width(), h = image.height();
+            if (w > 0 && h > 0 && (long) w * h <= MAX_CURSOR_PIXELS) {
+                byte[] rgba = new byte[w * h * 4];
+                image.pixels(rgba.length).get(rgba);
+                cursors.put(handle, new CursorImage(w, h, rgba, xhot, yhot));
+            }
+        } catch (RuntimeException | LinkageError e) {
+            // An unreadable image only means this cursor is not drawn.
+        }
+        return handle;
+    }
+    public static synchronized long glfwCreateStandardCursor(int shape) { return ++nextCursor; }
+    public static void glfwDestroyCursor(long cursor) {
+        cursors.remove(cursor);
+        if (currentCursor == cursor) {
+            currentCursor = 0L;
+            publishCursor();
+        }
+    }
+    public static void glfwSetCursor(long window, long cursor) {
+        currentCursor = cursor;
+        publishCursor();
+    }
     public static boolean glfwRawMouseMotionSupported() { return false; }
 
     // --- misc / time ---
