@@ -436,5 +436,32 @@ public final class SkBootstrap {
     /** True once the user cancelled the sign-in. Polled by frenchpress; does not block. */
     static native boolean nativeSignInCancelled();
 
+    /*
+     * Signing in with a username and password. A host that has not registered these still
+     * signs in by QR code: NativeBridgePrompt looks each one up on its own and treats a missing
+     * one as "not offered". Reached the same way as nativeShowSignIn, and none of them blocks.
+     */
+
+    /**
+     * Shows a sign-in form in place of the QR code. {@code kind} is {@code "credentials"},
+     * {@code "guard-device"} (a code from the Steam app) or {@code "guard-email"}. {@code detail}
+     * is why the last credentials were refused ({@code "password"} or another reason, null at
+     * first) for {@code "credentials"}, and the masked address for {@code "guard-email"}.
+     * {@code retry} is true when the previous Steam Guard code was refused.
+     */
+    static native void nativeShowSignInForm(String kind, String detail, boolean retry);
+
+    /**
+     * True while the user wants a username and password rather than the QR code. It is cleared
+     * when they go back to the QR code; this is not a cancel.
+     */
+    static native boolean nativeSignInPasswordRequested();
+
+    /** {@code "username\npassword"} once, after the form was submitted, else null. */
+    static native String nativeTakeSignInCredentials();
+
+    /** The Steam Guard code once, after it was submitted, else null. */
+    static native String nativeTakeSignInGuardCode();
+
     private SkBootstrap() {} // static-only
 }
